@@ -149,3 +149,72 @@ class MBIFPN(nn.Module):
                     else:
                         outs.append(self.fpn_convs[i](outs[-1]))
         return tuple(outs)
+
+class MBiFPNModule(nn.Module):
+    def __init__(self,
+                 channels,
+                 levels,
+                 conv_cfg=None,
+                 norm_cfg=None,
+                 activation=None):
+        super(MBiFPNModule, self).__init__()
+        self.activation = activation
+        self.levels = levels
+        self.bifpn_convs =nn.ModuleList()
+        self.wtd = nn.Parameter(torch.Tensor(5,levels-1))
+
+        for jj in range(2):
+            for i in range(self.levels-1):
+                fpn_conv = ConvModule(
+                    channels,
+                    channels,
+                    3,
+                    padding=1,
+                    conv_cfg=conv_cfg,
+                    norm_cfg=norm_cfg,
+                    activation=self.activation,
+                    inplace=False)
+                self.bifpn_convs.append(fpn_conv)
+        for i in range(self.levels - 2):
+            fpn_conv = ConvModule(
+                channels,
+                channels,
+                3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                activation=self.activation,
+                inplace=False)
+            self.bifpn_convs.append(fpn_conv)
+
+    # default init_weights for conv(msra) and norm in ConvModule
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                xavier_init(m, distribution='uniform')
+
+    @auto_fp16()
+    def forward(self, inputs):
+        assert len(inputs) == self.levels
+        # build top-down and down-top path with stack
+        used_backbone_levels = self.levels #4
+        jj=0
+        # build top-down
+        pathtd=inputs
+        for i in range(used_backbone_levels - 1, 0, -1): #3,2,1 //210
+            pathtd[i - 1] += F.interpolate(
+                pathtd[i], scale_factor=2, mode='nearest')
+            pathtd[i - 1] = self.bifpn_convs[jj](pathtd[i - 1])
+            jj=jj+1
+        # build down-top
+        pathdt=inputs
+        for i in range( 0, used_backbone_levels - 1, 1): #0,1,2 //123
+            pathdt[i+1] += F.avg_pool2d(pathdt[i],kernel_size=2)
+            pathdt[i + 1] = self.bifpn_convs[jj](pathdt[i + 1])
+            jj=jj+1
+        for i in range(1, used_backbone_levels-1, 1): #1,2
+            pathtd[i]+=pathdt[i]
+            pathdt[i] = self.bifpn_convs[jj](pathdt[i])
+            jj=jj+1
+        pathtd[used_backbone_levels-1] = pathdt[used_backbone_levels-1]
+        return pathtd
