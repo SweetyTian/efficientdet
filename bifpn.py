@@ -139,8 +139,8 @@ class BiFPNModule(nn.Module):
         self.activation = activation
         self.levels = levels
         self.bifpn_convs =nn.ModuleList()
-        self.wtd = nn.Parameter(torch.Tensor(5,levels-1))
-
+        self.w1 = nn.Parameter(torch.Tensor(2, levels))
+        self.w2 = nn.Parameter(torch.Tensor(3, levels - 2))
         for jj in range(2):
             for i in range(self.levels-1):  # 1,2,3
                 fpn_conv = ConvModule(
@@ -165,19 +165,25 @@ class BiFPNModule(nn.Module):
         assert len(inputs) == self.levels
         # build top-down and down-top path with stack
         # build laterals
-        used_backbone_levels = self.levels #4
+        levels = self.levels
         pathtd = inputs
         # build top-down
         jj=0
-        for i in range(used_backbone_levels - 1, 0, -1):
-            pathtd[i - 1] = (self.wtd[0,i-1]*pathtd[i - 1] + self.wtd[1,i-1]*F.interpolate(
-                pathtd[i], scale_factor=2, mode='nearest'))/(self.wtd[0,i-1]+self.wtd[1,i-1]+1e-5)
+        kk=0
+        for i in range(levels - 1, 0, -1):
+            pathtd[i - 1] = (self.w1[0,kk]*pathtd[i - 1] + self.w1[1,kk]*F.interpolate(
+                pathtd[i], scale_factor=2, mode='nearest'))/(self.w1[0,kk]+self.w1[1,kk]+1e-5)
             pathtd[i - 1] = self.bifpn_convs[jj](pathtd[i - 1])
             jj=jj+1
+            kk=kk+1
         # build down-top
-        for i in range(0, used_backbone_levels - 1, 1):
-            pathtd[i + 1] = (self.wtd[2, i] * pathtd[i + 1] + self.wtd[3, i] * F.avg_pool2d(pathtd[i], kernel_size=2) +
-                             self.wtd[4, i] * inputs[i + 1]) / (self.wtd[2, i] + self.wtd[3, i] + self.wtd[4, i] + 1e-5)
+        for i in range(0, levels - 2, 1):  #0,1,2
+            pathtd[i + 1] = (self.w2[0, i] * pathtd[i + 1] + self.w2[1, i] * F.avg_pool2d(pathtd[i], kernel_size=2) +
+                             self.w2[2, i] * inputs[i + 1]) / (self.w2[0, i] + self.w2[1, i] + self.w2[2, i] + 1e-5)
             pathtd[i + 1] = self.bifpn_convs[jj](pathtd[i - 1]) #3,4,5
             jj=jj+1
+
+        pathtd[levels-1] = (self.w1[0, kk] * pathtd[levels-1] + self.w1[1, kk] *
+                          F.avg_pool2d(pathtd[levels-2], kernel_size=2))/ (self.w1[0, kk] + self.w1[1, kk]+ 1e-5)
+        pathtd[levels-1] = self.bifpn_convs[jj](pathtd[levels-1])  # 3,4,5
         return pathtd
