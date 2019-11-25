@@ -5,7 +5,8 @@ from mmcv.cnn import xavier_init
 from mmdet.core import auto_fp16
 from ..registry import NECKS
 from ..utils import ConvModule
-
+import torch
+eps=0.0001
 
 @NECKS.register_module
 class MBIFPN(nn.Module):
@@ -51,7 +52,7 @@ class MBIFPN(nn.Module):
 
         self.lateral_convs = nn.ModuleList()
         self.fpn_convs = nn.ModuleList()
-
+        self.stack_mbifpn_convs = nn.ModuleList()
         for i in range(self.start_level, self.backbone_end_level):
             l_conv = ConvModule(
                 in_channels[i],
@@ -61,19 +62,14 @@ class MBIFPN(nn.Module):
                 norm_cfg=norm_cfg if not self.no_norm_on_lateral else None,
                 activation=self.activation,
                 inplace=False)
-            fpn_conv = ConvModule(
-                out_channels,
-                out_channels,
-                3,
-                padding=1,
-                conv_cfg=conv_cfg,
-                norm_cfg=norm_cfg,
-                activation=self.activation,
-                inplace=False)
-
             self.lateral_convs.append(l_conv)
-            self.fpn_convs.append(fpn_conv)
 
+        for ii in range(stack):
+            self.stack_mbifpn_convs.append(MBiFPNModule(channels=out_channels,
+                                                      levels= self.backbone_end_level-self.start_level,
+                                                      conv_cfg=conv_cfg,
+                                                      norm_cfg=norm_cfg,
+                                                      activation=activation))
         # add extra conv layers (e.g., RetinaNet)
         extra_levels = num_outs - self.backbone_end_level + self.start_level
         if add_extra_convs and extra_levels >= 1:
@@ -110,25 +106,11 @@ class MBIFPN(nn.Module):
             for i, lateral_conv in enumerate(self.lateral_convs)
         ]
 
-        # build top-down and down-top path with stack
+        # part 1: build top-down and down-top path with stack
         used_backbone_levels = len(laterals)
-        for stack in range(self.stack):
-            pathtd=laterals
-            for i in range(used_backbone_levels - 1, 0, -1): #3,2,1 //210
-                pathtd[i - 1] += F.interpolate(
-                    pathtd[i], scale_factor=2, mode='nearest')
-            pathdt=laterals
-            for i in range( 0, used_backbone_levels - 1, 1): #0,1,2 //123
-                pathdt[i+1] += F.avg_pool2d(pathdt[i],kernel_size=2)
-            for i in range(1, used_backbone_levels-1, 1): #1,2
-                pathtd[i]+=pathdt[i]
-            pathtd[used_backbone_levels-1] = pathdt[used_backbone_levels-1]
-            laterals = pathtd
-        # build outputs
-        # part 1: from original levels
-        outs = [
-            self.fpn_convs[i](laterals[i]) for i in range(used_backbone_levels)
-        ]
+        for ii in range(self.stack):
+            laterals = self.stack_mbifpn_convs[ii](laterals)
+        outs = laterals
         # part 2: add extra levels
         if self.num_outs > len(outs):
             # use max pool to get more levels on top of outputs
@@ -140,10 +122,10 @@ class MBIFPN(nn.Module):
             else:
                 if self.extra_convs_on_inputs:
                     orig = inputs[self.backbone_end_level - 1]
-                    outs.append(self.fpn_convs[used_backbone_levels](orig))
+                    outs.append(self.fpn_convs[0](orig))
                 else:
-                    outs.append(self.fpn_convs[used_backbone_levels](outs[-1]))
-                for i in range(used_backbone_levels + 1, self.num_outs):
+                    outs.append(self.fpn_convs[0](outs[-1]))
+                for i in range(1, self.num_outs-used_backbone_levels):
                     if self.relu_before_extra_convs:
                         outs.append(self.fpn_convs[i](F.relu(outs[-1])))
                     else:
@@ -161,7 +143,9 @@ class MBiFPNModule(nn.Module):
         self.activation = activation
         self.levels = levels
         self.bifpn_convs =nn.ModuleList()
-        self.wtd = nn.Parameter(torch.Tensor(5,levels-1))
+        #weighted
+        self.w1 = nn.Parameter(torch.Tensor(2, 3*levels-4))
+        self.relu1 = nn.ReLU()
 
         for jj in range(2):
             for i in range(self.levels-1):
@@ -170,6 +154,7 @@ class MBiFPNModule(nn.Module):
                     channels,
                     3,
                     padding=1,
+                    groups=channels,  # depthwise separable convolution
                     conv_cfg=conv_cfg,
                     norm_cfg=norm_cfg,
                     activation=self.activation,
@@ -181,6 +166,7 @@ class MBiFPNModule(nn.Module):
                 channels,
                 3,
                 padding=1,
+                groups=channels,  # depthwise separable convolution
                 conv_cfg=conv_cfg,
                 norm_cfg=norm_cfg,
                 activation=self.activation,
@@ -197,24 +183,26 @@ class MBiFPNModule(nn.Module):
     def forward(self, inputs):
         assert len(inputs) == self.levels
         # build top-down and down-top path with stack
-        used_backbone_levels = self.levels #4
+        levels = self.levels #4
+        w1 = self.relu1(self.w1)
         jj=0
         # build top-down
         pathtd=inputs
-        for i in range(used_backbone_levels - 1, 0, -1): #3,2,1 //210
-            pathtd[i - 1] += F.interpolate(
-                pathtd[i], scale_factor=2, mode='nearest')
+        for i in range(levels - 1, 0, -1): #3,2,1 //210
+            pathtd[i - 1] = (w1[0,jj]*pathtd[i - 1]+ w1[1,jj]*F.interpolate(
+                pathtd[i], scale_factor=2, mode='nearest'))/(w1[0,jj]+w1[1,jj]+eps)
             pathtd[i - 1] = self.bifpn_convs[jj](pathtd[i - 1])
             jj=jj+1
         # build down-top
         pathdt=inputs
-        for i in range( 0, used_backbone_levels - 1, 1): #0,1,2 //123
-            pathdt[i+1] += F.avg_pool2d(pathdt[i],kernel_size=2)
+        for i in range( 0, levels - 1, 1): #0,1,2 //123
+            pathdt[i + 1] = (w1[0,jj]*pathdt[i+1] + w1[1,jj]*F.max_pool2d(
+                pathdt[i],kernel_size=2))/(w1[0,jj]+w1[1,jj]+eps)
             pathdt[i + 1] = self.bifpn_convs[jj](pathdt[i + 1])
             jj=jj+1
-        for i in range(1, used_backbone_levels-1, 1): #1,2
-            pathtd[i]+=pathdt[i]
+        for i in range(1, levels-1, 1): #1,2
+            pathtd[i]=(w1[0,jj]*pathtd[i]+w1[1,jj]*pathdt[i])/(w1[0,jj]+w1[1,jj]+eps)
             pathdt[i] = self.bifpn_convs[jj](pathdt[i])
             jj=jj+1
-        pathtd[used_backbone_levels-1] = pathdt[used_backbone_levels-1]
+        pathtd[levels-1] = pathdt[levels-1]
         return pathtd

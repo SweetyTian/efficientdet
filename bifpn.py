@@ -6,6 +6,7 @@ from mmdet.core import auto_fp16
 from ..registry import NECKS
 from ..utils import ConvModule
 import torch
+eps=0.0001
 
 @NECKS.register_module
 class BIFPN(nn.Module):
@@ -65,8 +66,11 @@ class BIFPN(nn.Module):
             self.lateral_convs.append(l_conv)
 
         for ii in range(stack):
-            self.stack_bifpn_convs.append(
-                BiFPNModule(channels=out_channels, start_level=start_level, end_level=self.backbone_end_level))
+            self.stack_bifpn_convs.append(BiFPNModule(channels=out_channels,
+                                                      levels= self.backbone_end_level-self.start_level,
+                                                      conv_cfg=conv_cfg,
+                                                      norm_cfg=norm_cfg,
+                                                      activation=activation))
         # add extra conv layers (e.g., RetinaNet)
         extra_levels = num_outs - self.backbone_end_level + self.start_level
         if add_extra_convs and extra_levels >= 1:
@@ -104,8 +108,9 @@ class BIFPN(nn.Module):
         ]
         # part 1: build top-down and down-top path with stack
         used_backbone_levels = len(laterals)
-        outs = self.stack_bifpn_convs(laterals)
-
+        for bifpn_module in self.stack_bifpn_convs:
+            laterals = bifpn_module(laterals)
+        outs = laterals
         # part 2: add extra levels
         if self.num_outs > len(outs):
             # use max pool to get more levels on top of outputs
@@ -117,10 +122,10 @@ class BIFPN(nn.Module):
             else:
                 if self.extra_convs_on_inputs:
                     orig = inputs[self.backbone_end_level - 1]
-                    outs.append(self.fpn_convs[used_backbone_levels](orig))
+                    outs.append(self.fpn_convs[0](orig))
                 else:
-                    outs.append(self.fpn_convs[used_backbone_levels](outs[-1]))
-                for i in range(used_backbone_levels + 1, self.num_outs):
+                    outs.append(self.fpn_convs[0](outs[-1]))
+                for i in range(1, self.num_outs - used_backbone_levels):
                     if self.relu_before_extra_convs:
                         outs.append(self.fpn_convs[i](F.relu(outs[-1])))
                     else:
@@ -139,8 +144,11 @@ class BiFPNModule(nn.Module):
         self.activation = activation
         self.levels = levels
         self.bifpn_convs =nn.ModuleList()
+        #weighted
         self.w1 = nn.Parameter(torch.Tensor(2, levels))
+        self.relu1 = nn.ReLU()
         self.w2 = nn.Parameter(torch.Tensor(3, levels - 2))
+        self.relu2 = nn.ReLU()
         for jj in range(2):
             for i in range(self.levels-1):  # 1,2,3
                 fpn_conv = ConvModule(
@@ -148,6 +156,7 @@ class BiFPNModule(nn.Module):
                     channels,
                     3,
                     padding=1,
+                    groups=channels,#depthwise separable convolution
                     conv_cfg=conv_cfg,
                     norm_cfg=norm_cfg,
                     activation=self.activation,
@@ -164,26 +173,29 @@ class BiFPNModule(nn.Module):
     def forward(self, inputs):
         assert len(inputs) == self.levels
         # build top-down and down-top path with stack
-        # build laterals
         levels = self.levels
-        pathtd = inputs
+
+        #w relu
+        w1 = self.relu1(self.w1)
+        w2 = self.relu2(self.w2)
         # build top-down
         jj=0
         kk=0
+        pathtd = inputs
         for i in range(levels - 1, 0, -1):
-            pathtd[i - 1] = (self.w1[0,kk]*pathtd[i - 1] + self.w1[1,kk]*F.interpolate(
-                pathtd[i], scale_factor=2, mode='nearest'))/(self.w1[0,kk]+self.w1[1,kk]+1e-5)
+            pathtd[i - 1] = (w1[0,kk]*pathtd[i - 1] + w1[1,kk]*F.interpolate(
+                pathtd[i], scale_factor=2, mode='nearest'))/(w1[0,kk]+w1[1,kk]+eps)
             pathtd[i - 1] = self.bifpn_convs[jj](pathtd[i - 1])
             jj=jj+1
             kk=kk+1
         # build down-top
-        for i in range(0, levels - 2, 1):  #0,1,2
-            pathtd[i + 1] = (self.w2[0, i] * pathtd[i + 1] + self.w2[1, i] * F.avg_pool2d(pathtd[i], kernel_size=2) +
-                             self.w2[2, i] * inputs[i + 1]) / (self.w2[0, i] + self.w2[1, i] + self.w2[2, i] + 1e-5)
-            pathtd[i + 1] = self.bifpn_convs[jj](pathtd[i - 1]) #3,4,5
+        for i in range(0, levels - 2, 1):  #0,1,2 256 28 28 256 28 28
+            pathtd[i + 1] = (w2[0, i] * pathtd[i + 1] + w2[1, i] * F.max_pool2d(pathtd[i], kernel_size=2) +
+                             w2[2, i] * inputs[i + 1]) / (w2[0, i] + w2[1, i] + w2[2, i] + eps)
+            pathtd[i + 1] = self.bifpn_convs[jj](pathtd[i + 1]) #3,4,5
             jj=jj+1
 
-        pathtd[levels-1] = (self.w1[0, kk] * pathtd[levels-1] + self.w1[1, kk] *
-                          F.avg_pool2d(pathtd[levels-2], kernel_size=2))/ (self.w1[0, kk] + self.w1[1, kk]+ 1e-5)
+        pathtd[levels-1] = (w1[0, kk] * pathtd[levels-1] + w1[1, kk] *
+                          F.max_pool2d(pathtd[levels-2], kernel_size=2))/ (w1[0, kk] + w1[1, kk]+ eps)
         pathtd[levels-1] = self.bifpn_convs[jj](pathtd[levels-1])  # 3,4,5
         return pathtd
