@@ -56,6 +56,9 @@ class EfficientNet(nn.Module):
             for param in self.parameters():
                 param.requires_grad = False
 
+    def init_weights(self, pretrained=None):
+        return
+
     def forward(self, x):
         feature_map = self.model(x)
         outs=[]
