@@ -193,10 +193,10 @@ class GenEfficientNet(nn.Module):
             x = block(x)
             outs.append(x)
         # x = self.blocks(x)
-        x = self.conv_head(x)
-        x = self.bn2(x)
-        x = self.act2(x)
-        return x
+        # x = self.conv_head(x)
+        # x = self.bn2(x)
+        # x = self.act2(x)
+        return outs
 
     def as_sequential(self):
         layers = [self.conv_stem, self.bn1, self.act1]
@@ -207,13 +207,12 @@ class GenEfficientNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.global_pool(x)
-        x = x.flatten(1)
-        if self.drop_rate > 0.:
-            x = F.dropout(x, p=self.drop_rate, training=self.training)
-        return self.classifier(x)
-#1024/32 32
+        # x = self.features(x)
+        # x = self.global_pool(x)
+        # x = x.flatten(1)
+        # if self.drop_rate > 0.:
+        #     x = F.dropout(x, p=self.drop_rate, training=self.training)
+        return self.features(x)
 
 def _create_model(model_kwargs, variant, pretrained=False):
     as_sequential = model_kwargs.pop('as_sequential', False)
@@ -419,6 +418,7 @@ def _gen_efficientnet(variant, channel_multiplier=1.0, depth_multiplier=1.0, pre
       depth_multiplier: multiplier to number of repeats per stage
 
     """
+    # s1->s2
     arch_def = [
         ['ds_r1_k3_s1_e1_c16_se0.25'],
         ['ir_r2_k3_s2_e6_c24_se0.25'],
