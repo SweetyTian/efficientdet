@@ -185,23 +185,23 @@ class MBiFPNModule(nn.Module):
         # build top-down and down-top path with stack
         levels = self.levels #4
         w1 = self.relu1(self.w1)
+        w1 /= torch.sum(w1, dim=0) + eps  # normalize
         jj=0
         # build top-down
         pathtd=inputs
-        for i in range(levels - 1, 0, -1): #3,2,1 //210
-            pathtd[i - 1] = (w1[0,jj]*pathtd[i - 1]+ w1[1,jj]*F.interpolate(
-                pathtd[i], scale_factor=2, mode='nearest'))/(w1[0,jj]+w1[1,jj]+eps)
+        for i in range(levels - 1, 0, -1):
+            pathtd[i - 1] = w1[0, jj] * pathtd[i - 1] + w1[1, jj] * F.interpolate(pathtd[i], scale_factor=2,
+                                                                                  mode='nearest')
             pathtd[i - 1] = self.bifpn_convs[jj](pathtd[i - 1])
             jj=jj+1
         # build down-top
         pathdt=inputs
-        for i in range( 0, levels - 1, 1): #0,1,2 //123
-            pathdt[i + 1] = (w1[0,jj]*pathdt[i+1] + w1[1,jj]*F.max_pool2d(
-                pathdt[i],kernel_size=2))/(w1[0,jj]+w1[1,jj]+eps)
+        for i in range( 0, levels - 1, 1):
+            pathdt[i + 1] = w1[0,jj]*pathdt[i+1] + w1[1,jj]*F.max_pool2d(pathdt[i],kernel_size=2)
             pathdt[i + 1] = self.bifpn_convs[jj](pathdt[i + 1])
             jj=jj+1
         for i in range(1, levels-1, 1): #1,2
-            pathtd[i]=(w1[0,jj]*pathtd[i]+w1[1,jj]*pathdt[i])/(w1[0,jj]+w1[1,jj]+eps)
+            pathtd[i] = w1[0, jj] * pathtd[i] + w1[1, jj] * pathdt[i]
             pathdt[i] = self.bifpn_convs[jj](pathdt[i])
             jj=jj+1
         pathtd[levels-1] = pathdt[levels-1]

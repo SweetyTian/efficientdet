@@ -174,28 +174,29 @@ class BiFPNModule(nn.Module):
         assert len(inputs) == self.levels
         # build top-down and down-top path with stack
         levels = self.levels
-
         #w relu
         w1 = self.relu1(self.w1)
+        w1 /= torch.sum(w1, dim=0) + eps #normalize
         w2 = self.relu2(self.w2)
+        w2 /= torch.sum(w2, dim=0) + eps
         # build top-down
-        jj=0
         kk=0
         pathtd = inputs
         for i in range(levels - 1, 0, -1):
-            pathtd[i - 1] = (w1[0,kk]*pathtd[i - 1] + w1[1,kk]*F.interpolate(
-                pathtd[i], scale_factor=2, mode='nearest'))/(w1[0,kk]+w1[1,kk]+eps)
-            pathtd[i - 1] = self.bifpn_convs[jj](pathtd[i - 1])
-            jj=jj+1
+            pathtd[i - 1] = w1[0,kk]*pathtd[i - 1] + w1[1,kk]*F.interpolate(
+                pathtd[i], scale_factor=2, mode='nearest')
+            pathtd[i - 1] = self.bifpn_convs[kk](pathtd[i - 1])
             kk=kk+1
+        jj=kk
         # build down-top
-        for i in range(0, levels - 2, 1):  #0,1,2 256 28 28 256 28 28
-            pathtd[i + 1] = (w2[0, i] * pathtd[i + 1] + w2[1, i] * F.max_pool2d(pathtd[i], kernel_size=2) +
-                             w2[2, i] * inputs[i + 1]) / (w2[0, i] + w2[1, i] + w2[2, i] + eps)
-            pathtd[i + 1] = self.bifpn_convs[jj](pathtd[i + 1]) #3,4,5
+        for i in range(0, levels - 2, 1):
+            pathtd[i + 1] = w2[0, i] * pathtd[i + 1] + w2[1, i] * F.max_pool2d(pathtd[i], kernel_size=2) + w2[2, i] * \
+                            inputs[i + 1]
+            pathtd[i + 1] = self.bifpn_convs[jj](pathtd[i + 1])
             jj=jj+1
 
-        pathtd[levels-1] = (w1[0, kk] * pathtd[levels-1] + w1[1, kk] *
-                          F.max_pool2d(pathtd[levels-2], kernel_size=2))/ (w1[0, kk] + w1[1, kk]+ eps)
-        pathtd[levels-1] = self.bifpn_convs[jj](pathtd[levels-1])  # 3,4,5
+        pathtd[levels - 1] = w1[0, kk] * pathtd[levels - 1] + w1[1, kk] * F.max_pool2d(pathtd[levels - 2],
+                                                                                       kernel_size=2)
+        pathtd[levels - 1] = self.bifpn_convs[jj](pathtd[levels - 1])
         return pathtd
+

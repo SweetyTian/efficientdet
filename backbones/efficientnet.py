@@ -21,17 +21,17 @@ class EfficientNet(nn.Module):
     Example:
         >>> from mmdet.models import EfficientNet
         >>> import torch
-        >>> self = EfficientNet(model_name='tf_efficientnet_b1')
+        >>> self = EfficientNet(model_name='tf_efficientnet_b2', pretrained=False)
         >>> self.eval()
         >>> inputs = torch.rand(1,3,768,768)
         >>> level_outputs = self(inputs)
         >>> for level_out in level_outputs:
         ...     print(tuple(level_out.shape))
-        (1, 40, 96, 96)
-        (1, 80, 48, 48)
-        (1, 112, 24, 24)
-        (1, 192, 12, 12)
-        (1, 320, 6, 6)
+        (1, 48, 96, 96)
+        (1, 88, 48, 48)
+        (1, 120, 24, 24)
+        (1, 208, 12, 12)
+        (1, 352, 6, 6)
     """
 
     def __init__(self,
