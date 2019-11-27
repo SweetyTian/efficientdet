@@ -137,6 +137,7 @@ class BiFPNModule(nn.Module):
     def __init__(self,
                  channels,
                  levels,
+                 init=0.5,
                  conv_cfg=None,
                  norm_cfg=None,
                  activation=None):
@@ -145,9 +146,9 @@ class BiFPNModule(nn.Module):
         self.levels = levels
         self.bifpn_convs =nn.ModuleList()
         #weighted
-        self.w1 = nn.Parameter(torch.Tensor(2, levels))
+        self.w1 = nn.Parameter(torch.Tensor(2, levels).fill_(init))
         self.relu1 = nn.ReLU()
-        self.w2 = nn.Parameter(torch.Tensor(3, levels - 2))
+        self.w2 = nn.Parameter(torch.Tensor(3, levels - 2).fill_(init))
         self.relu2 = nn.ReLU()
         for jj in range(2):
             for i in range(self.levels-1):  # 1,2,3
