@@ -182,7 +182,10 @@ class BiFPNModule(nn.Module):
         w2 /= torch.sum(w2, dim=0) + eps
         # build top-down
         kk=0
-        pathtd = inputs
+        # pathtd = inputs copy is wrong
+        pathtd=[]
+        for in_tensor in inputs:
+            pathtd.append(torch.tensor(in_tensor))
         for i in range(levels - 1, 0, -1):
             pathtd[i - 1] = w1[0,kk]*pathtd[i - 1] + w1[1,kk]*F.interpolate(
                 pathtd[i], scale_factor=2, mode='nearest')
