@@ -2,6 +2,8 @@ import torch.nn as nn
 
 from torch.nn.modules.batchnorm import _BatchNorm
 from ..registry import BACKBONES
+import sys
+sys.path.append('./mmdet/models/backbones')
 import geffnet
 
 @BACKBONES.register_module
