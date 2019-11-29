@@ -11,7 +11,9 @@ model = dict(
         start_level=0,
         stack=6,
         add_extra_convs=True,
-        num_outs=5),
+        num_outs=5,
+        norm_cfg=dict(type='BN', requires_grad=False),
+        activation='relu'),
     bbox_head=dict(
         type='RetinaHead',
         num_classes=81,
