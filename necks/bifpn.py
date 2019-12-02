@@ -152,16 +152,25 @@ class BiFPNModule(nn.Module):
         self.relu2 = nn.ReLU()
         for jj in range(2):
             for i in range(self.levels-1):  # 1,2,3
-                fpn_conv = ConvModule(
-                    channels,
-                    channels,
-                    3,
-                    padding=1,
-                    groups=channels,#depthwise separable convolution
-                    conv_cfg=conv_cfg,
-                    norm_cfg=norm_cfg,
-                    activation=self.activation,
-                    inplace=False)
+                fpn_conv = nn.Sequential(
+                    ConvModule(
+                        channels,
+                        channels,
+                        3,
+                        padding=1,
+                        groups=channels,
+                        conv_cfg=conv_cfg,
+                        norm_cfg=norm_cfg,
+                        activation=self.activation,
+                        inplace=False),
+                    ConvModule(
+                        channels,
+                        channels,
+                        1,
+                        conv_cfg=conv_cfg,
+                        norm_cfg=norm_cfg,
+                        activation=self.activation,
+                        inplace=False))
                 self.bifpn_convs.append(fpn_conv)
 
     # default init_weights for conv(msra) and norm in ConvModule
